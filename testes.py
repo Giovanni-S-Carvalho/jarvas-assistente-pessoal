@@ -1,9 +1,19 @@
-from database import get_conexao
+def menu_principal():
+    while True:
+        print("1- Despesas\n2- Relatórios\n0- Sair")
+        opcao = input("> ")
+        if opcao =="1":
+            menu_despesas()
+        elif opcao == "0":
+            return
+def menu_despesas():
+    print("1- Adicionar\n2- Listar\n0- Voltar")
+    opcao = input("> ")
+    if opcao == "1":
+        print("ok")
+    elif opcao == "0":
+        return
 
-conn = get_conexao()
-cursor = conn.cursor()
-cursor.execute('SELECT status, SUM(valor) FROM boleto_apartamento GROUP BY status')
-resultado = cursor.fetchall()
-for i in resultado:
-    print(f'Status: {i[0]} | Total: R$ {i[1]:.2f}')
-conn.close()
+reze = MenuOpcao()
+
+reze.fazer_pergunta()

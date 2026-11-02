@@ -1,7 +1,9 @@
 import psycopg2
 import os
-
+from anthropic import Anthropic
 from datetime import datetime
+from dotenv import load_dotenv
+load_dotenv()
 
 agora = datetime.now()
 
@@ -10,6 +12,16 @@ DB_PASSWORD = os.environ.get('DB_PASSWORD','')
 def get_conexao():
     return psycopg2.connect(host='localhost',database='jarvas_db',user='postgres',password=DB_PASSWORD,port='5432'
 )
+
+def adicionar_coluna_categoria():
+    conn = get_conexao()
+    cursor = conn.cursor()
+    cursor.execute("""
+        ALTER TABLE minhas_despesas 
+        ADD COLUMN IF NOT EXISTS categoria TEXT
+    """)
+    conn.commit()
+    conn.close()
 
 def criar_tabelas():
     conn = get_conexao()
@@ -26,6 +38,7 @@ def criar_tabelas():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS minhas_despesas(
             id SERIAL PRIMARY KEY,
+            categoria TEXT,
             despesa TEXT,
             valor REAL,
             status TEXT,
@@ -77,6 +90,7 @@ def resumo_geral():
         print(f'Proximo boleto a vencer: {proximo[0]} R$ {proximo[1]} em {formatar_data(proximo[2])}')
     else:
         print('Proximo boleto a vencer: Tudo em dia Senhor!')
+    return
 
 def pagar_boleto_ap(id_boleto):
     conn = get_conexao()
@@ -89,7 +103,7 @@ def pagar_boleto_ap(id_boleto):
 def retirar_item_lista(id_item):
     conn = get_conexao()
     cursor = conn.cursor()
-    cursor.execute('DELETE FROM lista_desejos_ap WHERE id = ?', (id_item,))
+    cursor.execute('DELETE FROM lista_desejos_ap WHERE id = %s', (id_item,))
     conn.commit()
     conn.close()
     print(f'Item {id_item} retirado com sucesso!')
@@ -138,15 +152,16 @@ def adicionar_sql_lista_desejos(item, valor, marca):
     conn.close()
 
 def adicionar_boleto_despesas(despesa, valor, status, vencimento):
+    categoria = categorizar_despesa(despesa)
     conn = get_conexao()
     cursor = conn.cursor()
     cursor.execute(
-        'INSERT INTO minhas_despesas(despesa, valor, status, vencimento) VALUES(%s,%s,%s,%s)',
-        (despesa, valor, status,vencimento)
+        'INSERT INTO minhas_despesas(despesa, valor, status, vencimento, categoria) VALUES(%s,%s,%s,%s,%s)',
+        (despesa, valor, status, vencimento, categoria)
     )
     conn.commit()
     conn.close()
-    print('Boleto adicionado com sucesso!')
+    print(f'Boleto adicionado com sucesso! Categoria detectada: {categoria}')
 
 def ler_boleto_despesas():
     conn = get_conexao()
@@ -155,7 +170,7 @@ def ler_boleto_despesas():
     resultado = cursor.fetchall()
     conn.close()
     for i in resultado:
-        print(f'ID: {i[0]} | Despesa: {i[1]} | Valor: {i[2]} | Status: {i[3]} | Vencimento: {i[4]}')
+        print(f'ID: {i[0]} | Categoria: {i[1]} | Despesa: {i[2]} | Valor: {i[3]} | Status: {i[4]} | Vencimento: {i[5]}')
 
 def pagar_boleto_despesas(id_boleto):
     conn = get_conexao()
@@ -179,11 +194,63 @@ def total_boleto_imovel():
     total = cursor.fetchone()[0] or 0.0
     conn.close()
     return total
-def formatar_data(data):
-    data = datetime.strptime(data,'%Y-%m-%d')# entrada
-    resultado = data.strftime('%d/%m/%Y')#saida
-    return resultado
+# def formatar_data(data):
+#     data = datetime.strptime(data,'%Y-%m-%d')# entrada
+#     resultado = data.strftime('%d/%m/%Y')#saida
+#     return resultado
 def converter_data(data):
     data = datetime.strptime(data, '%d/%m/%Y')#entrada
-    resultado = data.strftime('%Y-%m-%d')#saida
+    resultado = data.strftime('%Y-%m-%d')#saida    
     return resultado
+    
+
+client = Anthropic()
+model = "claude-haiku-4-5"  # rapido e barato, bom pra tarefa simples de categorizacao
+
+CATEGORIAS_VALIDAS = ["Moradia", "Transporte", "Alimentacao", "Lazer", "Saude", "Educacao", "Outros"]
+
+categorizar_despesa_schema = {
+    "name": "categorizar_despesa",
+    "description": "Categoriza uma despesa pessoal em uma das categorias predefinidas.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "categoria": {
+                "type": "string",
+                "enum": CATEGORIAS_VALIDAS,
+                "description": "A categoria que melhor representa essa despesa"
+            }
+        },
+        "required": ["categoria"]
+    }
+}
+
+def categorizar_despesa(descricao):
+    response = client.messages.create(
+        model=model,
+        max_tokens=200,
+        tools=[categorizar_despesa_schema],
+        tool_choice={"type": "tool", "name": "categorizar_despesa"},
+        messages=[{
+            "role": "user",
+            "content": f"Categorize esta despesa: '{descricao}'"
+        }]
+    )
+    for block in response.content:
+        if block.type == "tool_use":
+            return block.input["categoria"]
+    return "Outros"
+
+def total_por_categoria():
+    conn = get_conexao()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT categoria, SUM(valor) 
+        FROM minhas_despesas 
+        GROUP BY categoria 
+        ORDER BY SUM(valor) DESC
+    """)
+    resultado = cursor.fetchall()
+    conn.close()
+    for categoria, total in resultado:
+        print(f'{categoria}: R$ {total:.2f}')
